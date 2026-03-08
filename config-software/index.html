@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MacroPad 配置工具</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .key-cell { aspect-ratio: 1; }
+    .key-cell.selected { ring: 3px solid #3b82f6; }
+  </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+  <div id="app" class="p-6 max-w-6xl mx-auto">
+    <!-- 头部 -->
+    <header class="flex justify-between items-center mb-8">
+      <h1 class="text-3xl font-bold">⌨️ MacroPad 双控键盘配置</h1>
+      <div class="flex gap-4">
+        <button id="connectBtn" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700">
+          🔌 连接设备
+        </button>
+        <button id="uploadBtn" class="bg-green-600 px-4 py-2 rounded hover:bg-green-700">
+          ⬆️ 上传配置
+        </button>
+      </div>
+    </header>
+
+    <!-- 连接状态 -->
+    <div id="status" class="mb-6 p-4 rounded bg-gray-800">
+      <span class="text-gray-400">状态:</span>
+      <span id="statusText" class="ml-2 text-yellow-400">未连接</span>
+    </div>
+
+    <!-- 模式选择 -->
+    <div class="flex gap-4 mb-8">
+      <button id="vibeMode" class="flex-1 py-4 rounded-lg text-lg font-bold bg-blue-600">
+        🎵 Vibe Coding 模式
+      </button>
+      <button id="openclawMode" class="flex-1 py-4 rounded-lg text-lg font-bold bg-gray-700">
+        🤖 OpenClaw 控制模式
+      </button>
+    </div>
+
+    <!-- 按键配置 -->
+    <div class="grid grid-cols-4 gap-4 mb-8">
+      <div v-for="i in 12" :key="i" 
+           class="key-cell bg-gray-800 rounded-lg p-4 cursor-pointer hover:bg-gray-700 transition"
+           :class="{selected: selectedKey === i-1}"
+           @click="selectKey(i-1)">
+        <div class="text-center">
+          <div class="text-2xl mb-2">{{ i }}</div>
+          <div class="text-sm text-gray-300">{{ currentKeys[i-1].label }}</div>
+          <div class="text-xs text-gray-500 mt-1">{{ currentKeys[i-1].type }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 按键编辑面板 -->
+    <div v-if="selectedKey !== null" class="bg-gray-800 rounded-lg p-6">
+      <h3 class="text-xl font-bold mb-4">编辑按键 {{ selectedKey + 1 }}</h3>
+      
+      <div class="grid grid-cols-2 gap-6">
+        <!-- 标签 -->
+        <div>
+          <label class="block text-sm text-gray-400 mb-2">显示标签</label>
+          <input v-model="currentKeys[selectedKey].label" 
+                 class="w-full bg-gray-700 rounded px-3 py-2" maxlength="8">
+        </div>
+        
+        <!-- 类型 -->
+        <div>
+          <label class="block text-sm text-gray-400 mb-2">动作类型</label>
+          <select v-model="currentKeys[selectedKey].type" 
+                  class="w-full bg-gray-700 rounded px-3 py-2">
+            <option value="hotkey">快捷键</option>
+            <option value="shell">Shell 命令</option>
+            <option value="serial">串口消息</option>
+          </select>
+        </div>
+        
+        <!-- 快捷键输入 -->
+        <div v-if="currentKeys[selectedKey].type === 'hotkey'" class="col-span-2">
+          <label class="block text-sm text-gray-400 mb-2">快捷键组合</label>
+          <div class="flex gap-2 flex-wrap">
+            <label v-for="mod in ['⌘', '⇧', '⌥', '⌃']" :key="mod" 
+                   class="px-3 py-2 bg-gray-700 rounded cursor-pointer"
+                   :class="{'bg-blue-600': currentKeys[selectedKey].mods.includes(mod)}">
+              <input type="checkbox" class="hidden" 
+                     @change="toggleMod(mod)">
+              {{ mod }}
+            </label>
+            <input v-model="currentKeys[selectedKey].key" 
+                   placeholder="键 (如 K, L)" 
+                   class="bg-gray-700 rounded px-3 py-2 w-24">
+          </div>
+        </div>
+        
+        <!-- Shell 命令 -->
+        <div v-if="currentKeys[selectedKey].type === 'shell'" class="col-span-2">
+          <label class="block text-sm text-gray-400 mb-2">命令</label>
+          <input v-model="currentKeys[selectedKey].command" 
+                 class="w-full bg-gray-700 rounded px-3 py-2" 
+                 placeholder="openclaw status">
+        </div>
+        
+        <!-- 串口消息 -->
+        <div v-if="currentKeys[selectedKey].type === 'serial'" class="col-span-2">
+          <label class="block text-sm text-gray-400 mb-2">JSON 消息</label>
+          <textarea v-model="currentKeys[selectedKey].json" 
+                    class="w-full bg-gray-700 rounded px-3 py-2 h-24" 
+                    placeholder='{"action": "camera_snap"}'></textarea>
+        </div>
+        
+        <!-- LED 颜色 -->
+        <div>
+          <label class="block text-sm text-gray-400 mb-2">LED 颜色</label>
+          <input type="color" v-model="currentKeys[selectedKey].color" 
+                 class="w-full h-10 rounded cursor-pointer">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script>
+    const { createApp, ref, computed, reactive } = Vue;
+
+    createApp({
+      setup() {
+        const selectedKey = ref(null);
+        const connected = ref(false);
+        const currentMode = ref('vibe');
+        
+        const vibeKeys = reactive([
+          { label: "AI Chat", type: "hotkey", mods: ["⌘"], key: "L", color: "#3b82f6" },
+          { label: "+Context", type: "hotkey", mods: ["⌘", "⇧"], key: "L", color: "#3b82f6" },
+          { label: "Submit", type: "hotkey", mods: ["⌘"], key: "↩", color: "#3b82f6" },
+          { label: "Edit", type: "hotkey", mods: ["⌘"], key: "K", color: "#10b981" },
+          { label: "Composer", type: "hotkey", mods: ["⌘"], key: "I", color: "#10b981" },
+          { label: "Full Comp", type: "hotkey", mods: ["⌘", "⇧"], key: "I", color: "#10b981" },
+          { label: "Accept", type: "hotkey", mods: [], key: "⇥", color: "#f59e0b" },
+          { label: "AI Fix", type: "hotkey", mods: ["⌘"], key: "K", color: "#ef4444" },
+          { label: "Reject", type: "hotkey", mods: [], key: "⎋", color: "#ef4444" },
+          { label: "New File", type: "hotkey", mods: ["⌘"], key: "N", color: "#8b5cf6" },
+          { label: "Save", type: "hotkey", mods: ["⌘"], key: "S", color: "#8b5cf6" },
+          { label: "Term", type: "hotkey", mods: ["⌘"], key: "`", color: "#8b5cf6" },
+        ]);
+
+        const openclawKeys = reactive([
+          { label: "Status", type: "shell", command: "openclaw status", color: "#10b981" },
+          { label: "Restart", type: "shell", command: "openclaw gateway restart", color: "#10b981" },
+          { label: "Doctor", type: "shell", command: "openclaw doctor", color: "#10b981" },
+          { label: "Sync", type: "shell", command: "clawhub sync", color: "#3b82f6" },
+          { label: "Sessions", type: "shell", command: "openclaw sessions list", color: "#3b82f6" },
+          { label: "Test Msg", type: "shell", command: "echo test", color: "#3b82f6" },
+          { label: "Screenshot", type: "serial", json: '{"action":"camera_snap"}', color: "#f59e0b" },
+          { label: "Run Cmd", type: "shell", command: "openclaw exec ls", color: "#f59e0b" },
+          { label: "KILL", type: "shell", command: "pkill -f openclaw", color: "#ef4444" },
+          { label: "Claw Open", type: "serial", json: '{"joint":"claw","angle":0}', color: "#ec4899" },
+          { label: "Claw Close", type: "serial", json: '{"joint":"claw","angle":120}', color: "#ec4899" },
+          { label: "Home", type: "serial", json: '{"action":"home_all"}', color: "#ec4899" },
+        ]);
+
+        const currentKeys = computed(() => {
+          return currentMode.value === 'vibe' ? vibeKeys : openclawKeys;
+        });
+
+        const selectKey = (i) => {
+          selectedKey.value = selectedKey.value === i ? null : i;
+        };
+
+        const toggleMod = (mod) => {
+          const key = vibeKeys[selectedKey.value];
+          if (key.mods.includes(mod)) {
+            key.mods = key.mods.filter(m => m !== mod);
+          } else {
+            key.mods.push(mod);
+          }
+        };
+
+        // 按钮事件
+        document.getElementById('connectBtn').onclick = async () => {
+          const statusText = document.getElementById('statusText');
+          try {
+            // 调用 Tauri 命令
+            const { invoke } = window.__TAURI__.core;
+            const result = await invoke('connect_serial', { port: 'auto' });
+            connected.value = true;
+            statusText.textContent = '已连接: ' + result.port;
+            statusText.className = 'ml-2 text-green-400';
+          } catch (e) {
+            // 降级为模拟模式
+            connected.value = true;
+            statusText.textContent = '模拟模式 (设备未连接)';
+            statusText.className = 'ml-2 text-blue-400';
+          }
+        };
+
+        document.getElementById('vibeMode').onclick = () => {
+          currentMode.value = 'vibe';
+          selectedKey.value = null;
+        };
+
+        document.getElementById('openclawMode').onclick = () => {
+          currentMode.value = 'openclaw';
+          selectedKey.value = null;
+        };
+
+        return {
+          selectedKey,
+          currentKeys,
+          selectKey,
+          toggleMod
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
