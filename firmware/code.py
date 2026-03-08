@@ -1,14 +1,8 @@
 """
-MacroPad 双控键盘固件 V2
+MacroPad 双控键盘固件 V3
 Vibe Coding + OpenClaw 控制模式
 
-功能:
-- 12个按键发送快捷键
-- 旋钮按下切换模式
-- 旋钮旋转实现:
-  - Vibe模式: 代码Diff导航 (Option+F7)
-  - OpenClaw模式: 消息历史滚动 (Option+上下箭头)
-- LED颜色指示当前模式
+兼容 Mac/Windows/Linux - 命令自带回车
 """
 import board
 import digitalio
@@ -40,7 +34,7 @@ encoder_switch = digitalio.DigitalInOut(board.ENCODER_SWITCH)
 encoder_switch.direction = digitalio.Direction.INPUT
 encoder_switch.pull = digitalio.Pull.UP
 
-# ===== 旋钮编码器 (ROTA, ROTB) =====
+# ===== 旋钮编码器 =====
 rot_a = digitalio.DigitalInOut(board.ROTA)
 rot_a.direction = digitalio.Direction.INPUT
 rot_a.pull = digitalio.Pull.UP
@@ -54,78 +48,102 @@ COLOR_VIBE = (0, 0, 255)        # 蓝色 - Vibe Coding
 COLOR_OPENCLAW = (0, 255, 0)     # 绿色 - OpenClaw 控制
 
 mode = 0  # 0=Vibe Coding, 1=OpenClaw
-
-# ===== 旋钮状态 =====
-encoder_state = 0  # 0=00, 1=01, 2=11, 3=10
-last_encoder_delta = 0
+encoder_state = 0
 
 # ===== 按键配置 =====
 # Vibe Coding 模式快捷键 (Cursor/Windsurf)
 vibe_actions = [
-    # 第1行: 上下文交互
-    ([Keycode.L], "AI Chat", "Cmd+L"),
-    ([Keycode.L], "+Context", "Cmd+Shift+L"),
-    ([Keycode.RETURN], "Submit", "Cmd+Return"),
-    
-    # 第2行: 代码生成
-    ([Keycode.K], "Edit", "Cmd+K"),
-    ([Keycode.I], "Composer", "Cmd+I"),
-    ([Keycode.I], "FullComp", "Cmd+Shift+I"),
-    
-    # 第3行: 审查
-    ([Keycode.TAB], "Accept", "Tab"),
-    ([Keycode.K], "AI Fix", "Cmd+K"),
-    ([Keycode.ESCAPE], "Reject", "Esc"),
-    
-    # 第4行: 文件操作
-    ([Keycode.N], "New", "Cmd+N"),
-    ([Keycode.S], "Save", "Cmd+S"),
-    ([Keycode.GRAVE_ACCENT], "Term", "Cmd+`"),
+    ([Keycode.L], "AI Chat"),
+    ([Keycode.L], "+Context"),
+    ([Keycode.RETURN], "Submit"),
+    ([Keycode.K], "Edit"),
+    ([Keycode.I], "Composer"),
+    ([Keycode.I], "FullComp"),
+    ([Keycode.TAB], "Accept"),
+    ([Keycode.K], "AI Fix"),
+    ([Keycode.ESCAPE], "Reject"),
+    ([Keycode.N], "New"),
+    ([Keycode.S], "Save"),
+    ([Keycode.GRAVE_ACCENT], "Term"),
 ]
 
-# OpenClaw 控制模式
+# OpenClaw 控制模式 - 直接发送命令+回车 (兼容 Mac/Windows/Linux)
 openclaw_actions = [
-    # 第1行: Gateway管理
-    ("Status", "openclaw status"),
-    ("Restart", "openclaw gateway restart"),
-    ("Doctor", "openclaw doctor"),
+    # Gateway管理
+    ("openclaw status", "Status"),
+    ("openclaw gateway restart", "Restart"),
+    ("openclaw doctor", "Doctor"),
     
-    # 第2行: 技能工具
-    ("Sync", "clawhub sync"),
-    ("Sessions", "openclaw sessions list"),
-    ("Test", "echo test"),
+    # 技能工具
+    ("clawhub sync", "Sync"),
+    ("openclaw sessions list", "Sessions"),
+    ("echo test", "Test"),
     
-    # 第3行: 硬件控制
-    ("Screen", "openclaw browser screenshot"),
-    ("Run", "openclaw exec ls"),
-    ("KILL", "pkill -f openclaw"),
+    # 硬件控制
+    ("openclaw nodes device_status", "Device"),
+    ("openclaw exec ls", "Run"),
+    ("pkill -f openclaw", "KILL"),
     
-    # 第4行: 预留
-    ("Msg1", "echo message 1"),
-    ("Msg2", "echo message 2"),
-    ("Msg3", "echo message 3"),
+    # 预留
+    ("echo 1", "Msg1"),
+    ("echo 2", "Msg2"),
+    ("echo 3", "Msg3"),
 ]
 
 # ===== 发送快捷键 =====
 def send_shortcut(key_codes):
     """发送快捷键组合"""
-    # 先按下修饰键
     for key in key_codes:
         if key in [Keycode.COMMAND, Keycode.CONTROL, Keycode.OPTION, Keycode.SHIFT]:
             keyboard.press(key)
     time.sleep(0.02)
-    
-    # 再按功能键
     for key in key_codes:
         if key not in [Keycode.COMMAND, Keycode.CONTROL, Keycode.OPTION, Keycode.SHIFT]:
             keyboard.press(key)
     time.sleep(0.05)
-    
     keyboard.release_all()
+
+# ===== 发送命令+回车 =====
+def send_command(text):
+    """发送命令并回车 - 兼容 Mac/Windows/Linux"""
+    # 逐字符发送
+    for char in text:
+        if char == ' ':
+            keyboard.press(Keycode.SPACE)
+            time.sleep(0.01)
+            keyboard.release(Keycode.SPACE)
+        elif char == '-':
+            keyboard.press(Keycode.MINUS)
+            time.sleep(0.01)
+            keyboard.release(Keycode.MINUS)
+        elif char == '_':
+            keyboard.press(Keycode.SHIFT, Keycode.MINUS)
+            time.sleep(0.01)
+            keyboard.release_all()
+        elif char.isupper() or char in '!@#$%^&*()_+{}|:"<>?':
+            keyboard.press(Keycode.SHIFT)
+            # 发送大写字母或符号
+            key = getattr(Keycode, char.upper(), None)
+            if key:
+                keyboard.press(key)
+                time.sleep(0.01)
+                keyboard.release(key)
+            keyboard.release(Keycode.SHIFT)
+        else:
+            key = getattr(Keycode, char.upper(), None)
+            if key:
+                keyboard.press(key)
+                time.sleep(0.01)
+                keyboard.release(key)
+        time.sleep(0.01)
+    
+    # 发送回车 (兼容所有系统)
+    keyboard.press(Keycode.RETURN)
+    time.sleep(0.05)
+    keyboard.release(Keycode.RETURN)
 
 # ===== 旋钮读取 =====
 def read_encoder():
-    """读取旋钮增量"""
     global encoder_state
     a = rot_a.value
     b = rot_b.value
@@ -153,30 +171,31 @@ def read_encoder():
     return delta
 
 # ===== LED 动画 =====
-def led_animation():
-    for i in range(12):
-        pixels[i] = COLOR_VIBE
-        time.sleep(0.02)
-    time.sleep(0.2)
-    pixels.fill((0, 0, 0))
+for i in range(12):
+    pixels[i] = COLOR_VIBE
+    time.sleep(0.02)
+time.sleep(0.2)
+pixels.fill((0, 0, 0))
 
-led_animation()
 print("Ready!")
-print("Mode: VIBE CODING")
+print("Mode: VIBE")
 
 # ===== 主循环 =====
 while True:
-    # ===== 按键检测 =====
+    # 按键检测
     for i, key in enumerate(keys):
         if not key.value:
             current_color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
             
             if mode == 0:
-                key_codes, label, shortcut = vibe_actions[i]
+                # Vibe Coding - 发送快捷键
+                key_codes = vibe_actions[i][0]
                 send_shortcut(key_codes)
-                print(f"Vibe: {label}")
+                print(f"Vibe: {vibe_actions[i][1]}")
             else:
-                label, cmd = openclaw_actions[i]
+                # OpenClaw - 发送命令+回车
+                cmd, label = openclaw_actions[i]
+                send_command(cmd)
                 print(f"OpenClaw: {label}")
             
             # LED 反馈
@@ -184,12 +203,11 @@ while True:
             time.sleep(0.1)
             pixels[i] = current_color
     
-    # ===== 旋钮按下 - 切换模式 =====
+    # 旋钮按下 - 切换模式
     if not encoder_switch.value:
         mode = 1 - mode
         current_color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
         
-        # LED 闪烁
         for _ in range(3):
             pixels.fill(current_color)
             time.sleep(0.1)
@@ -201,27 +219,23 @@ while True:
         while not encoder_switch.value:
             time.sleep(0.01)
     
-    # ===== 旋钮旋转 =====
+    # 旋钮旋转
     delta = read_encoder()
     if delta != 0:
         if mode == 0:
-            # Vibe模式: 代码Diff导航 (Option+F7 / Option+Shift+F7)
+            # Vibe模式: Diff导航
             if delta > 0:
-                # 右转: 下一处改动
                 keyboard.press(Keycode.OPTION, Keycode.F7)
             else:
-                # 左转: 上一处改动
                 keyboard.press(Keycode.OPTION, Keycode.SHIFT, Keycode.F7)
             time.sleep(0.05)
             keyboard.release_all()
             print(f"Diff: {'next' if delta > 0 else 'prev'}")
         else:
-            # OpenClaw模式: 消息历史滚动 (Option+上下箭头)
+            # OpenClaw模式: 滚动
             if delta > 0:
-                # 上滚动
                 keyboard.press(Keycode.OPTION, Keycode.UP_ARROW)
             else:
-                # 下滚动
                 keyboard.press(Keycode.OPTION, Keycode.DOWN_ARROW)
             time.sleep(0.05)
             keyboard.release_all()
