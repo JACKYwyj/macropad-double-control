@@ -1,206 +1,164 @@
 """
 MacroPad 双控键盘固件
 Vibe Coding + OpenClaw 控制模式
-基于 CircuitPython 10.x
+
+功能:
+- 12个按键发送快捷键
+- 旋钮按下切换模式
+- LED颜色指示当前模式
 """
-import time
 import board
-import json
-import usb_cdc
-from digitalio import DigitalInOut, Pull
-from adafruit_macropad import MacroPad
+import digitalio
+import neopixel
+import time
+import usb_hid
 from adafruit_hid.keyboard import Keyboard
 from adafruit_hid.keycode import Keycode
 
-# ==================== 配置 ====================
-CONFIG_VERSION = 1
-SERIAL_BAUDRATE = 115200
+print("Init...")
 
-# ==================== 硬件初始化 ====================
-macropad = MacroPad()
-keyboard = Keyboard()
+# ===== 按键初始化 =====
+keys = []
+for key_pin in [board.KEY1, board.KEY2, board.KEY3, board.KEY4, board.KEY5, board.KEY6,
+                board.KEY7, board.KEY8, board.KEY9, board.KEY10, board.KEY11, board.KEY12]:
+    k = digitalio.DigitalInOut(key_pin)
+    k.direction = digitalio.Direction.INPUT
+    k.pull = digitalio.Pull.UP
+    keys.append(k)
 
-# 模式枚举
-MODE_VIBE = 0
-MODE_OPENCLAW = 1
-current_mode = MODE_VIBE
+# ===== LED =====
+pixels = neopixel.NeoPixel(board.NEOPIXEL, 12)
 
-# ==================== 按键配置 ====================
-# Vibe Coding 模式 (12键)
-vibe_keys = [
-    # 1-3: 上下文交互 (蓝色)
-    {"label": "AI Chat", "keys": [Keycode.COMMAND, Keycode.L], "color": 0x3B82F6},
-    {"label": "+Context", "keys": [Keycode.COMMAND, Keycode.SHIFT, Keycode.L], "color": 0x3B82F6},
-    {"label": "Submit", "keys": [Keycode.COMMAND, Keycode.RETURN], "color": 0x3B82F6},
+# ===== HID 键盘 =====
+keyboard = Keyboard(usb_hid.devices)
+
+# ===== 旋钮开关 =====
+encoder_switch = digitalio.DigitalInOut(board.ENCODER_SWITCH)
+encoder_switch.direction = digitalio.Direction.INPUT
+encoder_switch.pull = digitalio.Pull.UP
+
+# ===== 配置 =====
+COLOR_VIBE = (0, 0, 255)        # 蓝色 - Vibe Coding
+COLOR_OPENCLAW = (0, 255, 0)     # 绿色 - OpenClaw 控制
+
+mode = 0  # 0=Vibe Coding, 1=OpenClaw
+
+# ===== 按键配置 =====
+# Vibe Coding 模式快捷键 (Cursor/Windsurf)
+vibe_actions = [
+    # 第1行: 上下文交互
+    ([Keycode.L], "AI Chat", "Cmd+L"),           # 按键1: 打开AI聊天
+    ([Keycode.L], "+Context", "Cmd+Shift+L"),    # 按键2: 添加选中代码到上下文
+    ([Keycode.RETURN], "Submit", "Cmd+Return"),  # 按键3: 提交
     
-    # 4-6: 代码生成 (绿色)
-    {"label": "Edit", "keys": [Keycode.COMMAND, Keycode.K], "color": 0x10B981},
-    {"label": "Composer", "keys": [Keycode.COMMAND, Keycode.I], "color": 0x10B981},
-    {"label": "Full Comp", "keys": [Keycode.COMMAND, Keycode.SHIFT, Keycode.I], "color": 0x10B981},
+    # 第2行: 代码生成
+    ([Keycode.K], "Edit", "Cmd+K"),              # 按键4: 内联编辑
+    ([Keycode.I], "Composer", "Cmd+I"),          # 按键5: Composer面板
+    ([Keycode.I], "FullComp", "Cmd+Shift+I"),    # 按键6: 全屏Composer
     
-    # 7-9: 审查与终端 (橙/红)
-    {"label": "Accept", "keys": [Keycode.TAB], "color": 0xF59E0B},
-    {"label": "AI Fix", "keys": [Keycode.COMMAND, Keycode.K], "color": 0xEF4444},
-    {"label": "Reject", "keys": [Keycode.ESCAPE], "color": 0xEF4444},
+    # 第3行: 审查
+    ([Keycode.TAB], "Accept", "Tab"),            # 按键7: 接受AI建议
+    ([Keycode.K], "AI Fix", "Cmd+K"),           # 按键8: 终端AI修复
+    ([Keycode.ESCAPE], "Reject", "Esc"),         # 按键9: 拒绝差异
     
-    # 10-12: 文件操作 (紫色)
-    {"label": "New File", "keys": [Keycode.COMMAND, Keycode.N], "color": 0x8B5CF6},
-    {"label": "Save", "keys": [Keycode.COMMAND, Keycode.S], "color": 0x8B5CF6},
-    {"label": "Term", "keys": [Keycode.COMMAND, Keycode.GRAVE_ACCENT], "color": 0x8B5CF6},
+    # 第4行: 文件操作
+    ([Keycode.N], "New", "Cmd+N"),               # 按键10: 新建文件
+    ([Keycode.S], "Save", "Cmd+S"),              # 按键11: 保存
+    ([Keycode.GRAVE_ACCENT], "Term", "Cmd+`"),   # 按键12: 切换终端
 ]
 
-# OpenClaw 控制模式 (12键)
-openclaw_keys = [
-    # 1-3: Gateway 管理
-    {"label": "Status", "action": "shell", "cmd": "openclaw status", "color": 0x10B981},
-    {"label": "Restart", "action": "shell", "cmd": "openclaw gateway restart", "color": 0x10B981},
-    {"label": "Doctor", "action": "shell", "cmd": "openclaw doctor", "color": 0x10B981},
+# OpenClaw 控制模式
+openclaw_actions = [
+    # 第1行: Gateway管理
+    ("Status", "openclaw status"),               # 按键1: 查看状态
+    ("Restart", "openclaw gateway restart"),     # 按键2: 重启Gateway
+    ("Doctor", "openclaw doctor"),              # 按键3: 健康检查
     
-    # 4-6: 技能与工具
-    {"label": "Sync", "action": "shell", "cmd": "clawhub sync", "color": 0x3B82F6},
-    {"label": "Sessions", "action": "shell", "cmd": "openclaw sessions list", "color": 0x3B82F6},
-    {"label": "Test Msg", "action": "shell", "cmd": "echo 'test'", "color": 0x3B82F6},
+    # 第2行: 技能工具
+    ("Sync", "clawhub sync"),                   # 按键4: 同步技能
+    ("Sessions", "openclaw sessions list"),     # 按键5: 会话列表
+    ("Test", "echo test"),                      # 按键6: 测试消息
     
-    # 7-9: 硬件控制
-    {"label": "Screenshot", "action": "serial", "msg": {"action": "camera_snap"}, "color": 0xF59E0B},
-    {"label": "Run Cmd", "action": "shell", "cmd": "openclaw exec ls", "color": 0xF59E0B},
-    {"label": "KILL", "action": "shell", "cmd": "pkill -f openclaw", "color": 0xEF4444},
+    # 第3行: 硬件控制
+    ("Screen", "screenshot"),                   # 按键7: 截屏
+    ("Run", "openclaw exec ls"),                # 按键8: 运行命令
+    ("KILL", "pkill -f openclaw"),             # 按键9: 急停!
     
-    # 10-12: 机械臂控制
-    {"label": "Claw Open", "action": "serial", "msg": {"joint": "claw", "angle": 0}, "color": 0xEC4899},
-    {"label": "Claw Close", "action": "serial", "msg": {"joint": "claw", "angle": 120}, "color": 0xEC4899},
-    {"label": "Home", "action": "serial", "msg": {"action": "home_all"}, "color": 0xEC4899},
+    # 第4行: 机械臂
+    ("ClawOp", "claw_open"),                    # 按键10: 夹爪张开
+    ("ClawCl", "claw_close"),                   # 按键11: 夹爪闭合
+    ("Home", "home_all"),                       # 按键12: 归位
 ]
 
-# 当前模式配置
-key_configs = {
-    MODE_VIBE: vibe_keys,
-    MODE_OPENCLAW: openclaw_keys
-}
+# ===== 发送快捷键 =====
+def send_shortcut(key_codes):
+    """发送快捷键组合"""
+    # 先按下所有修饰键
+    for key in key_codes:
+        if key in [Keycode.COMMAND, Keycode.CONTROL, Keycode.OPTION, Keycode.SHIFT]:
+            keyboard.press(key)
+    time.sleep(0.02)
+    
+    # 再按功能键
+    for key in key_codes:
+        if key not in [Keycode.COMMAND, Keycode.CONTROL, Keycode.OPTION, Keycode.SHIFT]:
+            keyboard.press(key)
+    time.sleep(0.05)
+    
+    # 释放所有键
+    keyboard.release_all()
 
-# ==================== 显示界面 ====================
-def draw_display():
-    """更新 OLED 显示"""
-    macropad.display.text.fill(0)
-    
-    # 顶部：模式名称
-    mode_name = "VIBE CODING" if current_mode == MODE_VIBE else "OPENCLAW"
-    macropad.display.text.text(mode_name, 0, 0, 1)
-    
-    # 显示12个按键标签 (每行4个，共3行)
-    config = key_configs[current_mode]
-    for i, key in enumerate(config):
-        row = i // 4
-        col = i % 4
-        x = col * 32
-        y = 12 + row * 18
-        # 截断过长的标签
-        label = key["label"][:6]
-        macropad.display.text.text(label, x, y, 1)
-    
-    macropad.display.show()
-
-def set_leds():
-    """根据当前模式设置 LED 颜色"""
-    config = key_configs[current_mode]
+# ===== LED 动画 =====
+def led_animation():
+    """启动动画"""
     for i in range(12):
-        key_index = macropad.keyboard.keys[i]
-        if key_index < 12:
-            macropad.pixels[key_index] = config[key_index].get("color", 0xFFFFFF)
+        pixels[i] = COLOR_VIBE
+        time.sleep(0.02)
+    time.sleep(0.2)
+    pixels.fill((0, 0, 0))
 
-def update_encoder_mode():
-    """旋钮按下切换模式"""
-    global current_mode
-    current_mode = (current_mode + 1) % 2
-    set_leds()
-    draw_display()
+led_animation()
+print("Ready!")
+print("Mode: VIBE CODING")
 
-# ==================== 命令处理 ====================
-def execute_action(config):
-    """执行按键动作"""
-    action_type = config.get("action", "hotkey")
-    
-    if action_type == "hotkey":
-        # 发送快捷键
-        keys = config.get("keys", [])
-        if keys:
-            keyboard.press(*keys)
-            time.sleep(0.05)
-            keyboard.release(*keys)
+# ===== 主循环 =====
+while True:
+    # ===== 按键检测 =====
+    for i, key in enumerate(keys):
+        if not key.value:
+            current_color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
             
-    elif action_type == "shell":
-        # 通过 USB 串口发送 shell 命令到 PC
-        cmd = config.get("cmd", "")
-        if cmd and usb_cdc.console:
-            usb_cdc.console.write(f"SHELL:{cmd}\n".encode())
+            if mode == 0:
+                # Vibe Coding 模式 - 发送快捷键
+                key_codes, label, shortcut = vibe_actions[i]
+                send_shortcut(key_codes)
+                print(f"Vibe: {label} ({shortcut})")
+            else:
+                # OpenClaw 模式
+                label, cmd = openclaw_actions[i]
+                print(f"OpenClaw: {label} -> {cmd}")
             
-    elif action_type == "serial":
-        # 通过串口发送 JSON 给机械臂
-        msg = config.get("msg", {})
-        if usb_cdc.console:
-            usb_cdc.console.write(f"SERIAL:{json.dumps(msg)}\n".encode())
-
-# ==================== 串口通信 ====================
-def handle_serial_command(data: str):
-    """处理来自 PC 的串口命令"""
-    try:
-        if data.startswith("SHELL:"):
-            # 执行 shell 命令 (由 PC 端执行)
-            pass
-        elif data.startswith("SERIAL:"):
-            # 转发给机械臂
-            pass
-        elif data.startswith("CONFIG:"):
-            # 接收新配置
-            pass
-    except Exception as e:
-        print(f"Error: {e}")
-
-# ==================== 主循环 ====================
-def main():
-    # 初始化显示
-    draw_display()
-    set_leds()
+            # LED 反馈
+            pixels[i] = (255, 255, 255)
+            time.sleep(0.1)
+            pixels[i] = current_color
     
-    # 记录上次编码器位置
-    last_encoder = macropad.encoder
+    # ===== 旋钮按下 - 切换模式 =====
+    if not encoder_switch.value:
+        mode = 1 - mode
+        current_color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
+        
+        # LED 闪烁指示
+        for _ in range(3):
+            pixels.fill(current_color)
+            time.sleep(0.1)
+            pixels.fill((0, 0, 0))
+            time.sleep(0.1)
+        
+        print(f"Mode: {'VIBE CODING' if mode == 0 else 'OPENCLAW'}")
+        
+        # 等待释放
+        while not encoder_switch.value:
+            time.sleep(0.01)
     
-    print(f"MacroPad Firmware v{CONFIG_VERSION} Ready")
-    print(f"Mode: {'VIBE CODING' if current_mode == 'MODE_VIBE' else 'OPENCLAW'}")
-    
-    while True:
-        # 按键事件处理
-        event = macropad.keys.events.get()
-        if event:
-            key_number = event.key_number
-            if event.pressed:
-                # 执行对应按键的动作
-                config = key_configs[current_mode][key_number]
-                execute_action(config)
-                # 视觉反馈：闪烁
-                macropad.pixels[key_number] = 0xFFFFFF
-                time.sleep(0.1)
-                set_leds()
-        
-        # 旋钮按下：切换模式
-        if macropad.encoder_switch:
-            update_encoder_mode()
-            time.sleep(0.2)  # 防抖
-        
-        # 旋钮旋转：在 OpenClaw 模式下可作为参数调节
-        encoder_delta = macropad.encoder - last_encoder
-        if encoder_delta != 0 and current_mode == MODE_OPENCLAW:
-            # 可以发送增量值给 PC
-            if usb_cdc.console:
-                usb_cdc.console.write(f"ENCODER:{encoder_delta}\n".encode())
-        last_encoder = macropad.encoder
-        
-        # 处理串口命令
-        if usb_cdc.console and usb_cdc.console.in_waiting:
-            data = usb_cdc.console.readline()
-            handle_serial_command(data.decode())
-        
-        time.sleep(0.01)
-
-if __name__ == "__main__":
-    main()
+    time.sleep(0.01)
