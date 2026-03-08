@@ -1,8 +1,8 @@
 """
-MacroPad 双控键盘固件 V4
-- 有效按钮常亮
-- 按下时闪烁
-- 无效按钮不亮
+MacroPad 双控键盘固件 V5
+- Vibe模式: 旋钮切换API模型 + OLED显示
+- OpenClaw模式: 消息滚动
+- LED常亮/按下闪烁
 """
 import board
 import digitalio
@@ -11,6 +11,19 @@ import time
 import usb_hid
 from adafruit_hid.keyboard import Keyboard
 from adafruit_hid.keycode import Keycode
+
+# ===== OLED 屏幕 =====
+try:
+    import displayio
+    import adafruit_sh1106
+    from fourwire import FourWire
+    
+    displayio.release_displays()
+    i2c = board.I2C()
+    display = adafruit_sh1106.SH1106(displayio.I2CDisplay(i2c, device_address=0x3c), width=128, height=64)
+    HAS_DISPLAY = True
+except:
+    HAS_DISPLAY = False
 
 print("Init...")
 
@@ -46,11 +59,20 @@ rot_b.pull = digitalio.Pull.UP
 COLOR_VIBE = (0, 0, 255)
 COLOR_OPENCLAW = (0, 255, 0)
 
-mode = 0
+mode = 0  # 0=Vibe, 1=OpenClaw
 encoder_state = 0
 
+# ===== API 模型列表 =====
+api_models = [
+    "claude-sonnet",
+    "claude-opus", 
+    "gpt-4o",
+    "gpt-4o-mini",
+    "deepseek",
+]
+current_model_index = 0
+
 # ===== 按键配置 =====
-# Vibe Coding 模式 - 全部12个按键都有功能
 vibe_actions = [
     ([Keycode.L], "AI Chat"),
     ([Keycode.L], "+Context"),
@@ -66,25 +88,22 @@ vibe_actions = [
     ([Keycode.GRAVE_ACCENT], "Term"),
 ]
 
-# OpenClaw 模式 - 只有9个按键有功能
-# 10,11,12 无功能
 openclaw_actions = [
-    ("openclaw status", "Status"),              # 1
-    ("openclaw gateway restart", "Restart"),     # 2
-    ("openclaw doctor", "Doctor"),              # 3
-    ("clawhub sync", "Sync"),                  # 4
-    ("openclaw sessions list", "Sessions"),     # 5
-    ("echo test", "Test"),                     # 6
-    ("openclaw nodes device_status", "Device"), # 7
-    ("openclaw exec ls", "Run"),              # 8
-    ("pkill -f openclaw", "KILL"),            # 9
-    (None, None),  # 10 - 无功能
-    (None, None),  # 11 - 无功能
-    (None, None),  # 12 - 无功能
+    ("openclaw status", "Status"),
+    ("openclaw gateway restart", "Restart"),
+    ("openclaw doctor", "Doctor"),
+    ("clawhub sync", "Sync"),
+    ("openclaw sessions list", "Sessions"),
+    ("echo test", "Test"),
+    ("openclaw nodes device_status", "Device"),
+    ("openclaw exec ls", "Run"),
+    ("pkill -f openclaw", "KILL"),
+    (None, None),
+    (None, None),
+    (None, None),
 ]
 
-# ===== 有效按键映射 =====
-vibe_valid = [True] * 12  # 全部有效
+vibe_valid = [True] * 12
 openclaw_valid = [True, True, True, True, True, True, True, True, True, False, False, False]
 
 # ===== 发送快捷键 =====
@@ -160,9 +179,35 @@ def read_encoder():
     encoder_state = current
     return delta
 
+# ===== 显示更新 =====
+def update_display():
+    if not HAS_DISPLAY:
+        return
+    
+    display.fill(0)
+    
+    # 顶部: 模式
+    mode_name = "VIBE CODING" if mode == 0 else "OPENCLAW"
+    display.text(mode_name, 0, 0, 1)
+    
+    if mode == 0:
+        # Vibe模式: 显示当前模型
+        model = api_models[current_model_index]
+        display.text("Model:", 0, 16, 1)
+        display.text(model, 0, 28, 1)
+        
+        # 显示操作提示
+        display.text("Rot: Change model", 0, 48, 1)
+    else:
+        # OpenClaw模式
+        display.text("Press key to", 0, 16, 1)
+        display.text("run command", 0, 28, 1)
+        display.text("Rot: Scroll msg", 0, 48, 1)
+    
+    display.show()
+
 # ===== 设置LED =====
 def set_mode_leds():
-    """根据当前模式设置LED"""
     color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
     valid = vibe_valid if mode == 0 else openclaw_valid
     
@@ -172,23 +217,26 @@ def set_mode_leds():
         else:
             pixels[i] = (0, 0, 0)
 
-# ===== 启动动画 =====
+# ===== 启动 =====
 for i in range(12):
     pixels[i] = COLOR_VIBE
     time.sleep(0.02)
 time.sleep(0.2)
+
+update_display()
 set_mode_leds()
 
 print("Ready!")
+print("Mode: VIBE")
 
 # ===== 主循环 =====
 while True:
+    # 按键检测
     for i, key in enumerate(keys):
         if not key.value:
             current_color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
             valid = vibe_valid if mode == 0 else openclaw_valid
             
-            # 检查按键是否有效
             if not valid[i]:
                 continue
             
@@ -202,7 +250,6 @@ while True:
                     send_command(cmd)
                     print(f"OpenClaw: {label}")
             
-            # 按下闪烁
             pixels[i] = (255, 255, 255)
             time.sleep(0.1)
             set_mode_leds()
@@ -211,14 +258,14 @@ while True:
     if not encoder_switch.value:
         mode = 1 - mode
         
-        # 切换动画
-        color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
         for _ in range(3):
+            color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
             pixels.fill(color)
             time.sleep(0.1)
             pixels.fill((0, 0, 0))
             time.sleep(0.1)
         
+        update_display()
         set_mode_leds()
         print(f"Mode: {'VIBE' if mode == 0 else 'OPENCLAW'}")
         
@@ -229,13 +276,12 @@ while True:
     delta = read_encoder()
     if delta != 0:
         if mode == 0:
-            if delta > 0:
-                keyboard.press(Keycode.OPTION, Keycode.F7)
-            else:
-                keyboard.press(Keycode.OPTION, Keycode.SHIFT, Keycode.F7)
-            time.sleep(0.05)
-            keyboard.release_all()
+            # Vibe模式: 切换模型
+            current_model_index = (current_model_index + delta) % len(api_models)
+            update_display()
+            print(f"Model: {api_models[current_model_index]}")
         else:
+            # OpenClaw模式: 滚动
             if delta > 0:
                 keyboard.press(Keycode.OPTION, Keycode.UP_ARROW)
             else:
