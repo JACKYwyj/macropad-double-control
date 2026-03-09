@@ -1,9 +1,7 @@
 """
-MacroPad 双控键盘固件 V6
-- Vibe模式: 旋钮切换模型(编号显示)
-- OpenClaw模式: 消息滚动
-- LED常亮/按下闪烁
-- OLED显示当前模式
+MacroPad 双控键盘固件 V7
+- 显示当前模式 + 最后按下的按键功能
+- OLED优化排版
 """
 import board
 import digitalio
@@ -66,35 +64,38 @@ encoder_state = 0
 MODEL_COUNT = 5
 current_model_index = 0
 
+# 最后按下的按键 (功能名, 快捷键/命令)
+last_action = ("--", "--")
+
 # ===== 按键配置 =====
 vibe_actions = [
-    ([Keycode.L], "AI Chat"),
-    ([Keycode.L], "+Context"),
-    ([Keycode.RETURN], "Submit"),
-    ([Keycode.K], "Edit"),
-    ([Keycode.I], "Composer"),
-    ([Keycode.I], "FullComp"),
-    ([Keycode.TAB], "Accept"),
-    ([Keycode.K], "AI Fix"),
-    ([Keycode.ESCAPE], "Reject"),
-    ([Keycode.N], "New"),
-    ([Keycode.S], "Save"),
-    ([Keycode.GRAVE_ACCENT], "Term"),
+    ([Keycode.L], "AI Chat", "⌘ L"),
+    ([Keycode.L], "+Context", "⌘⇧L"),
+    ([Keycode.RETURN], "Submit", "⌘↩"),
+    ([Keycode.K], "Edit", "⌘ K"),
+    ([Keycode.I], "Composer", "⌘ I"),
+    ([Keycode.I], "FullComp", "⌘⇧I"),
+    ([Keycode.TAB], "Accept", "Tab"),
+    ([Keycode.K], "AI Fix", "⌘ K"),
+    ([Keycode.ESCAPE], "Reject", "Esc"),
+    ([Keycode.N], "New", "⌘ N"),
+    ([Keycode.S], "Save", "⌘ S"),
+    ([Keycode.GRAVE_ACCENT], "Term", "⌘ `"),
 ]
 
 openclaw_actions = [
-    ("openclaw status", "Status"),
-    ("openclaw gateway restart", "Restart"),
-    ("openclaw doctor", "Doctor"),
-    ("clawhub sync", "Sync"),
-    ("openclaw sessions list", "Sessions"),
-    ("echo test", "Test"),
-    ("openclaw nodes device_status", "Device"),
-    ("openclaw exec ls", "Run"),
-    ("pkill -f openclaw", "KILL"),
-    (None, None),
-    (None, None),
-    (None, None),
+    ("openclaw status", "Status", "status"),
+    ("openclaw gateway restart", "Restart", "restart"),
+    ("openclaw doctor", "Doctor", "doctor"),
+    ("clawhub sync", "Sync", "sync"),
+    ("openclaw sessions list", "Sessions", "sessions"),
+    ("echo test", "Test", "test"),
+    ("openclaw nodes device_status", "Device", "device"),
+    ("openclaw exec ls", "Run", "exec ls"),
+    ("pkill -f openclaw", "KILL", "pkill"),
+    (None, None, None),
+    (None, None, None),
+    (None, None, None),
 ]
 
 vibe_valid = [True] * 12
@@ -180,18 +181,28 @@ def update_display():
     
     display.fill(0)
     
-    mode_name = "VIBE CODING" if mode == 0 else "OPENCLAW"
+    # 模式标题
+    mode_name = "=== VIBE MODE ===" if mode == 0 else "== OPENCLAW =="
     display.text(mode_name, 0, 0, 1)
     
+    # 分隔线
+    for x in range(0, 128, 8):
+        display.pixel(x, 12, 1)
+    
+    # 最后按下的功能
+    display.text("Last:", 0, 18, 1)
+    display.text(last_action[0], 36, 18, 1)
+    
+    # 快捷键/命令
+    display.text(last_action[1], 0, 30, 1)
+    
+    # 底部提示
     if mode == 0:
-        # Vibe模式: 显示模型编号
-        display.text("Model:", 0, 16, 1)
-        display.text(f"{current_model_index + 1}/{MODEL_COUNT}", 0, 28, 1)
-        display.text("Rot: Switch", 0, 48, 1)
+        display.text("Model:", 70, 30, 1)
+        display.text(f"{current_model_index + 1}/{MODEL_COUNT}", 100, 30, 1)
+        display.text("Rot:Switch  Knob:Mode", 0, 50, 1)
     else:
-        display.text("Press key to", 0, 16, 1)
-        display.text("run command", 0, 28, 1)
-        display.text("Rot: Scroll", 0, 48, 1)
+        display.text("Rot:Scroll Knob:Mode", 0, 50, 1)
     
     display.show()
 
@@ -228,22 +239,28 @@ while True:
                 continue
             
             if mode == 0:
-                key_codes = vibe_actions[i][0]
+                key_codes, label, shortcut = vibe_actions[i]
                 send_shortcut(key_codes)
+                last_action = (label, shortcut)
             else:
-                cmd, label = openclaw_actions[i]
+                cmd, label, shortcut = openclaw_actions[i]
                 if cmd:
                     send_command(cmd)
+                    last_action = (label, shortcut)
             
             # LED闪烁
             current_color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
             pixels[i] = (255, 255, 255)
             time.sleep(0.1)
             set_mode_leds()
+            
+            # 更新显示
+            update_display()
     
     # 旋钮按下 - 切换模式
     if not encoder_switch.value:
         mode = 1 - mode
+        last_action = ("--", "--")
         
         for _ in range(3):
             color = COLOR_VIBE if mode == 0 else COLOR_OPENCLAW
