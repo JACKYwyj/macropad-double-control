@@ -96,6 +96,14 @@ circup install adafruit_macropad
 - [CircuitPython](https://circuitpython.org/)
 - [OpenClaw](https://github.com/openclaw/openclaw)
 
-## 许可证
+## 许可证与使用声明
 
 MIT License
+
+**⚠️ 禁止商用声明**
+本项目仅供个人学习交流使用，禁止任何形式的商业用途。包括但不限于：
+- 禁止用于商业产品或服务
+- 禁止二次销售或授权他人使用
+- 禁止在商业项目中引用本代码
+
+如需商用授权，请联系作者。
